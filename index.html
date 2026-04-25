@@ -314,6 +314,22 @@ select:focus,input:focus{
                  oninput="calculate()" placeholder="15.0">
         </div>
       </div>
+      <div class="field">
+        <div class="field-label"><span class="ico">🔬</span> Obs. Density (kg/m³)</div>
+        <div class="input-unit">
+          <div class="unit-badge">kg</div>
+          <input type="number" id="obsDensInput" value="550.9" min="300" max="800" step="0.1"
+                 oninput="calculate()" placeholder="550.9">
+        </div>
+      </div>
+      <div class="field">
+        <div class="field-label"><span class="ico">💧</span> Liq. Eq. Vap (m³) <span style="color:#aaa;font-weight:400;font-size:10px">— من الشاشة</span></div>
+        <div class="input-unit">
+          <div class="unit-badge">m³</div>
+          <input type="number" id="liqEqVapInput" value="0" min="0" max="1000" step="0.001"
+                 oninput="calculate()" placeholder="0.000">
+        </div>
+      </div>
       <button class="btn-calc" onclick="calculate()">
         ⚡ CALCULATE
       </button>
@@ -4337,21 +4353,27 @@ function fmt(v, dec=0) {
 // CALCULATE
 // ═══════════════════════════════════════════════════════════════
 function saveInputs() {
-  localStorage.setItem('lpg_sphere', document.getElementById('sphereSelect').value);
-  localStorage.setItem('lpg_meter',  document.getElementById('meterInput').value);
-  localStorage.setItem('lpg_sg',     document.getElementById('sgInput').value);
-  localStorage.setItem('lpg_temp',   document.getElementById('tempInput').value);
+  localStorage.setItem('lpg_sphere',   document.getElementById('sphereSelect').value);
+  localStorage.setItem('lpg_meter',    document.getElementById('meterInput').value);
+  localStorage.setItem('lpg_sg',       document.getElementById('sgInput').value);
+  localStorage.setItem('lpg_temp',     document.getElementById('tempInput').value);
+  localStorage.setItem('lpg_obs_dens', document.getElementById('obsDensInput').value);
+  localStorage.setItem('lpg_liq_eq_vap', document.getElementById('liqEqVapInput').value);
 }
 
 function loadInputs() {
-  const sphere = localStorage.getItem('lpg_sphere');
-  const meter  = localStorage.getItem('lpg_meter');
-  const sg     = localStorage.getItem('lpg_sg');
-  const temp   = localStorage.getItem('lpg_temp');
-  if (sphere) document.getElementById('sphereSelect').value = sphere;
-  if (meter)  document.getElementById('meterInput').value  = meter;
-  if (sg)     document.getElementById('sgInput').value     = sg;
-  if (temp)   document.getElementById('tempInput').value   = temp;
+  const sphere  = localStorage.getItem('lpg_sphere');
+  const meter   = localStorage.getItem('lpg_meter');
+  const sg      = localStorage.getItem('lpg_sg');
+  const temp    = localStorage.getItem('lpg_temp');
+  const obsDens = localStorage.getItem('lpg_obs_dens');
+  if (sphere)  document.getElementById('sphereSelect').value  = sphere;
+  if (meter)   document.getElementById('meterInput').value    = meter;
+  if (sg)      document.getElementById('sgInput').value       = sg;
+  if (temp)    document.getElementById('tempInput').value     = temp;
+  if (obsDens) document.getElementById('obsDensInput').value  = obsDens;
+  const liqEqVapS = localStorage.getItem('lpg_liq_eq_vap');
+  if (liqEqVapS) document.getElementById('liqEqVapInput').value = liqEqVapS;
 }
 
 function calculate() {
@@ -4360,6 +4382,8 @@ function calculate() {
   const meters   = parseFloat(document.getElementById('meterInput').value) || 0;
   const sg       = parseFloat(document.getElementById('sgInput').value) || 0.56;
   const temp     = parseFloat(document.getElementById('tempInput').value) || 15;
+  const obsDens  = parseFloat(document.getElementById('obsDensInput').value) || (sg * 1000);
+  const liqEqVap = parseFloat(document.getElementById('liqEqVapInput').value) || 0;
 
   const sphere  = SPHERE_DATA[sphereId];
   const litres  = getLiters(sphereId, meters);
@@ -4375,12 +4399,17 @@ function calculate() {
 
   const volM3   = litres / 1000;
   const pctFull = litres / sphere.maxLitres * 100;
-  const vcf     = 1 - 0.00137 * (temp - 15);
-  const density = sg * 1000 * vcf;
-  const massKg  = volM3 * density;
-  const massMT  = massKg / 1000;
+  const refDens = sg * 1000;                         // Ref Density @ 15°C = SG × 1000
+  const vcf     = obsDens / refDens;                 // VCF = ObsDens / RefDens
+  const gsv     = volM3 * vcf;                       // GSV = GOV × VCF (m³)
+  const nsv     = gsv + liqEqVap;                    // NSV = GSV + Liq.Eq.Vap (m³)
+  const airDens = 1.2;                               // Air Density kg/m³ (API standard)
+  const liqMass = volM3 * obsDens / 1000;            // Liq Mass = GOV × ObsDens / 1000 (MT)
+  const wiv     = nsv * refDens / 1000;              // WIV = NSV × RefDens / 1000 ✅
+  const wia     = wiv * (1 - airDens / refDens);     // WIA = WIV × (1 - 1.2/RefDens) ✅
+  const massMT  = wiv;
   const govBbl  = litres / BBL;
-  const massBbl = massKg / (sg * BBL);
+  const massBbl = (wiv * 1000) / (sg * BBL);
 
   // ── LOOKUP CARD ───────────────────────────────────────────
   const warn = pctFull > 95
@@ -4415,33 +4444,55 @@ function calculate() {
   document.getElementById('massCard').innerHTML = `
     <table class="calc-table">
       <tr>
-        <td class="lbl">Volume</td>
-        <td class="fml">D19 ÷ 1000</td>
+        <td class="lbl">GOV</td>
+        <td class="fml">Litres ÷ 1000</td>
         <td class="val">${fmt(volM3,3)} m³</td>
       </tr>
       <tr>
         <td class="lbl">VCF</td>
-        <td class="fml">1 − 0.00137×(T−15)</td>
+        <td class="fml">ObsDens ÷ RefDens</td>
         <td class="val">${vcf.toFixed(5)}</td>
       </tr>
       <tr>
-        <td class="lbl">Density @ ${temp}°C</td>
-        <td class="fml">SG × 1000 × VCF</td>
-        <td class="val">${fmt(density,3)} kg/m³</td>
+        <td class="lbl">GSV</td>
+        <td class="fml">GOV × VCF</td>
+        <td class="val">${fmt(gsv,3)} m³</td>
+      </tr>
+      <tr>
+        <td class="lbl">NSV</td>
+        <td class="fml">GSV + Liq.Eq.Vap</td>
+        <td class="val">${fmt(nsv,3)} m³</td>
+      </tr>
+      <tr>
+        <td class="lbl">Ref Density</td>
+        <td class="fml">SG × 1000</td>
+        <td class="val">${fmt(refDens,1)} kg/m³</td>
       </tr>
     </table>
     <div style="height:12px"></div>
-    <div class="tiles-2">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      <div class="tile tile-gold">
+        <div class="tile-label">Liq. Mass</div>
+        <div class="tile-value">${fmt(liqMass,3)}</div>
+        <div class="tile-unit">MT</div>
+      </div>
       <div class="tile tile-red">
-        <div class="tile-label">Liq. Mass</div>
-        <div class="tile-value">${fmt(massKg,0)}</div>
-        <div class="tile-unit">kg</div>
+        <div class="tile-label">WIV</div>
+        <div class="tile-value tile-big">${fmt(wiv,3)}</div>
+        <div class="tile-unit">MT</div>
       </div>
-      <div class="tile tile-red" style="background:#FDEDEC">
-        <div class="tile-label">Liq. Mass</div>
-        <div class="tile-value tile-big">${fmt(massMT,3)}</div>
-        <div class="tile-unit">Metric Ton</div>
+      <div class="tile tile-navy">
+        <div class="tile-label">WIA</div>
+        <div class="tile-value tile-big">${fmt(wia,3)}</div>
+        <div class="tile-unit">MT</div>
       </div>
+    </div>
+    <div style="margin-top:10px;padding:8px 12px;background:#FEF9E7;border-radius:6px;
+                font-size:10px;color:#7D6608;font-family:'IBM Plex Mono',monospace;line-height:1.8">
+      Liq Mass = GOV × ObsDens ÷ 1000 &nbsp;|&nbsp;
+      NSV = GSV + Liq.Eq.Vap &nbsp;|&nbsp;
+      WIV = NSV × RefDens ÷ 1000 &nbsp;|&nbsp;
+      WIA = WIV × (1 − 1.2 ÷ RefDens)
     </div>
   `;
 
